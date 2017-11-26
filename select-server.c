@@ -13,7 +13,7 @@
 #include <time.h>
 #include <signal.h>
 
-#define BUF_LEN 1024
+#define BUF_LEN (1024 * 1024)
 #define SERV_PORT 8993
 #define FD_SIZE 100
 #define TIME_FORMAT "%Y-%m-%d %H:%M:%S"
@@ -190,7 +190,8 @@ int write_to_obfs(int client_sock, struct port_relay_ctx_t* p_ctx,
 }
 
 int read_obfs_data(fd_set* rset, fd_set* allset, 
-        struct port_relay_ctx_t * p_ctx, int size) {
+        struct port_relay_ctx_t * p_ctx, int size, 
+        ssize_t* obfs_max_read_size) {
     int i = 0, tsock = -1, csock = -1;
     char         obfs_buf[BUF_LEN];               
     ssize_t read_len = 0;
@@ -222,6 +223,9 @@ int read_obfs_data(fd_set* rset, fd_set* allset,
                 write_size = write(csock, obfs_buf, read_len);
                 printf("get from obfs, write to client sock[%d] data size:%d\n", 
                         csock, write_size);
+                if (read_len > *obfs_max_read_size) {
+                    *obfs_max_read_size = read_len;
+                }
             }
         }
         ptr++;
@@ -272,7 +276,7 @@ int main( int argc, char ** argv )
     int             listenfd, connfd, sockfd, maxfd, maxi, i;
     int             nready = 0, client[FD_SIZE];        //!> 接收select返回值、保存客户端套接字
     int             lens;
-    ssize_t     n;                //!> read字节数
+    ssize_t     n, max_read_size = 0, obfs_max_read_size = 0;                //!> read字节数
     fd_set        rset, allset;    //!> 不要理解成就只能保存一个，其实fd_set有点像封装的数组
     char         buf[BUF_LEN];               
     socklen_t    clilen;
@@ -350,7 +354,8 @@ int main( int argc, char ** argv )
             // break;
         }
         // update_maxfd(ctx, CTX_SIZE, &maxfd);
-        printf("max fd[%d]\n", maxfd);
+        printf("max fd[%d] max read size[%lu] obfs max read size[%lu]\n", 
+                maxfd, max_read_size, obfs_max_read_size);
         //LOGI("server loop %d.", loop_count);
         printf("server loop %d, select return %d\n", loop_count, nready);
         rset = allset;//!> 由于allset可能每次一个循环之后都有变化，所以每次都赋值一次
@@ -372,7 +377,7 @@ int main( int argc, char ** argv )
 
         //LOGI("server read obfs data.");
         // read obfs data
-        if (read_obfs_data(&rset, &allset, ctx, CTX_SIZE) < 0) {
+        if (read_obfs_data(&rset, &allset, ctx, CTX_SIZE, &obfs_max_read_size) < 0) {
             printf("read obfs data error.\n");
             return -1;
         }
@@ -456,6 +461,9 @@ int main( int argc, char ** argv )
                         FD_CLR( sockfd, &allset );
                         client[i] = -1;
                         continue;
+                    }
+                    if (n > max_read_size) {
+                        max_read_size = n;
                     }
                    
                     // printf("Server Recv: %s\n", buf);
