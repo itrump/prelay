@@ -100,9 +100,9 @@ int serve_prepare(fd_set* fset, int* maxfd, struct port_relay_ctx_t* p_ctx,
         if (*maxfd < p_ctx->obfs_sock) {
             *maxfd = p_ctx->obfs_sock;
         }
-        p_ctx++;
         // add to set
         FD_SET(p_ctx->obfs_sock, fset);
+        p_ctx++;
     }
     printf("server prepared ok.\n");
     return 0;
@@ -270,12 +270,11 @@ int main( int argc, char ** argv )
 {
     struct port_relay_ctx_t ctx[CTX_SIZE];
     int             listenfd, connfd, sockfd, maxfd, maxi, i;
-    int             nready, client[FD_SIZE];        //!> 接收select返回值、保存客户端套接字
+    int             nready = 0, client[FD_SIZE];        //!> 接收select返回值、保存客户端套接字
     int             lens;
     ssize_t     n;                //!> read字节数
     fd_set        rset, allset;    //!> 不要理解成就只能保存一个，其实fd_set有点像封装的数组
     char         buf[BUF_LEN];               
-    char         obfs_buf[BUF_LEN];               
     socklen_t    clilen;
     struct sockaddr_in servaddr, chiaddr;
     int opt = 1;
@@ -350,7 +349,8 @@ int main( int argc, char ** argv )
         if (loop_count > 20) {
             // break;
         }
-        update_maxfd(ctx, CTX_SIZE, &maxfd);
+        // update_maxfd(ctx, CTX_SIZE, &maxfd);
+        printf("max fd[%d]\n", maxfd);
         //LOGI("server loop %d.", loop_count);
         printf("server loop %d, select return %d\n", loop_count, nready);
         rset = allset;//!> 由于allset可能每次一个循环之后都有变化，所以每次都赋值一次
@@ -413,6 +413,7 @@ int main( int argc, char ** argv )
                 continue;                    //!> 返回
                }
                                             //!> listen的作用就是向数组中加入套接字！
+            printf("put connfd[%d] to allset\n", connfd);
             FD_SET( connfd, &allset );    //!> 说明现在对于这个连接也是感兴趣的！
                                             //!> 所以加入allset的阵容
             if( connfd > maxfd )            //!> 这个还是为了解决乱七八糟的数组模型
