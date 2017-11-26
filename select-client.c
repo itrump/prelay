@@ -22,7 +22,7 @@ void send_and_recv( int connfd )
     char recv[MAXLINE];
     fd_set rset;
     FD_ZERO( &rset );
-    int maxfd = ( fileno( fp ) > connfd ? fileno( fp ) : connfd  + 1 );   
+    int maxfd = (fileno( fp ) > connfd ? fileno( fp ) : connfd) + 1 ;   
                                                 //!> 输入和输出的最大值
     int n;
    
@@ -47,7 +47,7 @@ void send_and_recv( int connfd )
             n = read( connfd, recv, MAXLINE );
             if( n == 0 )
             {
-                printf("Recv ok...\n");
+                printf("Recv ok...data size is 0, maybe closed.\n");
                 break;
             }
             else if( n == -1 )
