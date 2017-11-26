@@ -32,7 +32,6 @@
 // conf of obfs local
 const static int obfs_local_port = 8992;
 const static char* obfs_local_ip = "127.0.0.1";
-const static int SOCK_MAP_NUM = 1024;
 const static int CTX_SIZE = 32;
 const char* LOG_FILE = "prelay.log";
 
@@ -133,6 +132,7 @@ int rebuild_obfs_sock(fd_set* fdset,
         }
         new_sock = ptr->obfs_sock;
         FD_SET(ptr->obfs_sock, fdset);
+        // update max sockfd
         // be careful not forget
         ptr++;
         // build new obfs sock success
@@ -205,7 +205,7 @@ int read_obfs_data(fd_set* rset, fd_set* allset,
             printf("get a ready obfs sock[%d]\n", tsock);
             memset(obfs_buf, 0, sizeof(obfs_buf));
             read_len = read(tsock, obfs_buf, BUF_LEN);
-            printf("get data from obfs server\n");
+            printf("get data from obfs server, read len[%d]\n", (int)read_len);
             // obfs sock disconnected
             if (read_len == 0) {
                 printf("[%d] get from obfs, Data size is 0, maybe closed.\n", tsock);
@@ -215,7 +215,7 @@ int read_obfs_data(fd_set* rset, fd_set* allset,
                 }
             // error
             } else if (read_len < 0) {
-                printf("Recv error...\n");
+                printf("Recv error...size[%d]\n", (int)(read_len));
                 return -1;
             // get data succ
             } else {
@@ -247,6 +247,25 @@ int destroy_client_session(struct port_relay_ctx_t* p_ctx,
     return 0;
 }
 
+int update_maxfd(struct port_relay_ctx_t* p_ctx, int size, int* maxfd) {
+    int i = 0;
+    struct port_relay_ctx_t* ptr = p_ctx;
+    for (i = 0; i < size; ++i) {
+        if (ptr->obfs_sock > *maxfd) {
+            printf("update maxfd from[%d] to [%d]",
+                    *maxfd, ptr->obfs_sock);
+            *maxfd = ptr->obfs_sock;
+        }
+        if (ptr->client_sock > *maxfd) {
+            printf("update maxfd from[%d] to [%d]",
+                    *maxfd, ptr->client_sock);
+            *maxfd = ptr->client_sock;
+        }
+        ptr++;
+    }
+    return 0;
+}
+
 int main( int argc, char ** argv )
 {
     struct port_relay_ctx_t ctx[CTX_SIZE];
@@ -260,7 +279,6 @@ int main( int argc, char ** argv )
     socklen_t    clilen;
     struct sockaddr_in servaddr, chiaddr;
     int opt = 1;
-    int sock_map[SOCK_MAP_NUM];
     int client_sock = -1;
     int write_size = 0;
     int loop_count = 0;
@@ -271,7 +289,6 @@ int main( int argc, char ** argv )
         return -1;
     }
 
-    memset(sock_map, 0, sizeof(sock_map));
    
     //LOGI("server begin listen.");
     if( ( listenfd = socket( AF_INET, SOCK_STREAM, 0 ) ) == -1 )
@@ -330,8 +347,12 @@ int main( int argc, char ** argv )
     while( 1 )
     {
         loop_count++;
+        if (loop_count > 20) {
+            // break;
+        }
+        update_maxfd(ctx, CTX_SIZE, &maxfd);
         //LOGI("server loop %d.", loop_count);
-        printf("server loop %d.\n", loop_count);
+        printf("server loop %d, select return %d\n", loop_count, nready);
         rset = allset;//!> 由于allset可能每次一个循环之后都有变化，所以每次都赋值一次
         //LOGI("server begin select.");
         if( (nready = select( maxfd + 1, &rset, NULL, NULL, NULL )) == -1)
@@ -414,6 +435,7 @@ int main( int argc, char ** argv )
             {            //!> 也就说client数组不是连续的全正数或者-1，可能是锯齿状的
                 if( FD_ISSET( sockfd, &rset ) )    //!> if 当前这个数据套接字有要读的
                  {
+                     printf("get an active fd[%d]\n", sockfd);
                      memset( buf, 0, sizeof( buf ) );    //!> 此步重要，不要有时候出错
                 
                      n = read( sockfd, buf, BUF_LEN);
