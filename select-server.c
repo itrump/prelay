@@ -232,6 +232,7 @@ int read_obfs_data(fd_set* rset, fd_set* allset,
                 return -1;
             // get data succ
             } else {
+                // TODO check csock valid
                 write_size = write(csock, obfs_buf, read_len);
                 printf("get from obfs, write to client sock[%d] data size:%d\n", 
                         csock, write_size);
