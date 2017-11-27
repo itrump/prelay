@@ -1,3 +1,7 @@
+/*
+ * reference:
+ *  - http://pubs.opengroup.org/onlinepubs/9699919799/functions/accept.html 
+ **/
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -245,16 +249,19 @@ int destroy_client_session(struct port_relay_ctx_t* p_ctx,
         int size, int client_sock) {
     int i = 0, csock = -1;
     struct port_relay_ctx_t* ptr_ctx = p_ctx;
-    for (i = 0; i < size; ++i) {
+    for (i = 0; i < size; ++i, ptr_ctx++) {
         csock = ptr_ctx->client_sock;
-        ptr_ctx++;
+        printf("traverse client sock[%d], try find [%d]\n", 
+                csock, client_sock);
         if (csock != client_sock) {
             continue;
         }
         // release this client sock and idle it
+        printf("remove ctx client sock[%d], target sock[%d], and set idle\n", 
+                ptr_ctx->client_sock, client_sock);
         ptr_ctx->client_sock = -1;
         ptr_ctx->status = 0;
-        printf("remove client sock[%d], and set idle\n", csock);
+        break;
     }
     return 0;
 }
@@ -281,7 +288,7 @@ int update_maxfd(struct port_relay_ctx_t* p_ctx, int size, int* maxfd) {
 int main( int argc, char ** argv )
 {
     struct port_relay_ctx_t ctx[CTX_SIZE];
-    int             listenfd, connfd, sockfd, maxfd, maxi, i;
+    int             listenfd, connfd, sockfd, maxfd, maxi, i, j;
     int             nready = 0, client[FD_SIZE];        //!> 接收select返回值、保存客户端套接字
     int             lens;
     ssize_t     n, max_read_size = 0, obfs_max_read_size = 0;                //!> read字节数
@@ -414,6 +421,7 @@ int main( int argc, char ** argv )
                {                                    //!> 字的退出时间是不一样的，后面的
                    if( client[i] < 0 )                //!> 可能先退出，那么就乱了，所以只
                    {                                //!> 有这样了！
+                       printf("set client[%d]=%d\n", i, connfd);
                        client[i] = connfd;            //!> 将client的请求连接保存
                        break;
                    }
@@ -421,8 +429,12 @@ int main( int argc, char ** argv )
               
                if( i == FD_SIZE )                //!> The last one
                {
-                   printf( "To many ... " );
+                   printf( "Too many client connect... close current connfd[%d]\n", connfd);
                    close( connfd );            //!> if 满了那么就不连接你了，关闭吧
+                   for (j = 0; j < FD_SIZE; j++) {
+                       printf("processing client sock[%d]\t", client[j]);
+                   }
+                   printf("\n");
                 continue;                    //!> 返回
                }
                                             //!> listen的作用就是向数组中加入套接字！
@@ -458,6 +470,7 @@ int main( int argc, char ** argv )
                          printf("Error!\n");
                          close( sockfd );            //!> 说明在这个请求端口上出错了！
                         FD_CLR( sockfd, &allset );
+                        printf("read size < 0, close client[%d] fd[%d]\n", i, sockfd);
                         client[i] = -1;
                         continue;
                      }
@@ -467,6 +480,7 @@ int main( int argc, char ** argv )
                         close( sockfd );            //!> 说明在这个请求端口上读完了！
                         destroy_client_session(ctx, CTX_SIZE, sockfd);
                         FD_CLR( sockfd, &allset );
+                        printf("no data. close client[%d] fd[%d]\n", i, sockfd);
                         client[i] = -1;
                         continue;
                     }
