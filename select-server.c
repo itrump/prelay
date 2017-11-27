@@ -28,6 +28,14 @@
 
 #define print(format, ...)   \
     printf(format, __VA_ARGS__); \
+/*
+ * Notes
+ *  An fd_set is a fixed size buffer. 
+ * Executing FD_CLR() or FD_SET() with a value of fd that  
+ * is negative or is equal to or larger than
+ * FD_SETSIZE will result in undefined behavior.
+ * Moreover, POSIX requires fd to be a valid file descriptor.
+ */
 
 // conf of obfs local
 const static int obfs_local_port = 8992;
