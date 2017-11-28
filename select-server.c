@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
-#include <time.h>
+#include <sys/time.h>
 #include <signal.h>
 
 #define BUF_LEN (1024 * 1024)
@@ -291,6 +291,7 @@ int main( int argc, char ** argv )
     struct port_relay_ctx_t ctx[CTX_SIZE];
     int             listenfd, connfd, sockfd, maxfd, maxi, i, j;
     int             nready = 0, client[FD_SIZE];        //!> 接收select返回值、保存客户端套接字
+    struct timeval  client_tv[FD_SIZE]; // record active timestamp
     int             lens;
     ssize_t     n, max_read_size = 0, obfs_max_read_size = 0;                //!> read字节数
     fd_set        rset, allset;    //!> 不要理解成就只能保存一个，其实fd_set有点像封装的数组
@@ -352,6 +353,8 @@ int main( int argc, char ** argv )
     for( i = 0; i < FD_SIZE; i++ )    //!> 首先置为全-1
     {
         client[i] = -1;        //!> 首先client的等待队列中是没有的，所以全部置为-1
+        client_tv[i].tv_sec = 0;
+        client_tv[i].tv_usec = 0;
     }
    
     FD_ZERO(&allset);        //!> 先将其置为0
@@ -395,7 +398,7 @@ int main( int argc, char ** argv )
         // read obfs data
         if (read_obfs_data(&rset, &allset, ctx, CTX_SIZE, &obfs_max_read_size) < 0) {
             printf("read obfs data error.\n");
-            return -1;
+            break;
         }
        
        
@@ -424,6 +427,8 @@ int main( int argc, char ** argv )
                    {                                //!> 有这样了！
                        printf("set client[%d]=%d\n", i, connfd);
                        client[i] = connfd;            //!> 将client的请求连接保存
+                       // record active time
+                       gettimeofday(&(client_tv[i]), NULL);
                        break;
                    }
                }
@@ -432,8 +437,19 @@ int main( int argc, char ** argv )
                {
                    printf( "Too many client connect... close current connfd[%d]\n", connfd);
                    close( connfd );            //!> if 满了那么就不连接你了，关闭吧
+                   // remove timeout client sock
                    for (j = 0; j < FD_SIZE; j++) {
+                       struct timeval time_now;
+                       int time_out_sec = 10;
+                       gettimeofday(&time_now, NULL);
                        printf("processing client sock[%d]\t", client[j]);
+                       if (time_now.tv_sec > client_tv[j].tv_sec + time_out_sec) {
+                           printf("get a time out client sock[%d]=%d\n", j, client[j]);
+                           close( client[j]);
+                           FD_CLR( client[j], &allset );
+                           client[j] = -1;
+                           printf("close client sock[%d]=%d\n", j, client[j]);
+                       }
                    }
                    printf("\n");
                 continue;                    //!> 返回
