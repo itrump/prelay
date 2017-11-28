@@ -1,7 +1,11 @@
 /*
  * reference:
  *  - http://pubs.opengroup.org/onlinepubs/9699919799/functions/accept.html 
+ *  - https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.hala001/orgblockasyn.htm
  **/
+// TODO
+//  - resolve problems on mobile devices
+
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -286,6 +290,22 @@ int update_maxfd(struct port_relay_ctx_t* p_ctx, int size, int* maxfd) {
     return 0;
 }
 
+// In blocking mode, the recv, send, 
+// connect (TCP only) and accept (TCP only) 
+// socket API calls will block indefinitely until 
+// the requested action has been performed. 
+// In non-blocking mode, these functions return immediately
+
+int set_fd_nonblocking(int fd) {
+    int flags;
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) {
+        printf("get flags[%d], change to 0", flags);
+        flags = 0;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 int main( int argc, char ** argv )
 {
     struct port_relay_ctx_t ctx[CTX_SIZE];
@@ -297,7 +317,8 @@ int main( int argc, char ** argv )
     fd_set        rset, allset;    //!> 不要理解成就只能保存一个，其实fd_set有点像封装的数组
     char         buf[BUF_LEN];               
     socklen_t    clilen;
-    struct sockaddr_in servaddr, chiaddr;
+    struct sockaddr_in servaddr;
+    struct sockaddr chiaddr;
     int opt = 1;
     int client_sock = -1;
     int write_size = 0;
@@ -321,6 +342,8 @@ int main( int argc, char ** argv )
         printf( "setsocketopt failed.: %d\n", errno );
         exit( EXIT_FAILURE );
     }
+
+    set_fd_nonblocking(listenfd);
    
     //!>
     //!> 下面是接口信息
@@ -417,7 +440,28 @@ int main( int argc, char ** argv )
                    continue;
                }
                //LOGI("client connect fd:%d.", connfd);
+               char ip_str[INET6_ADDRSTRLEN];
+               // ipv4 ok, while ipv6 differs
+               struct sockaddr_in* addr_in = (struct sockaddr_in*)&chiaddr;
+               printf("get connect from client[%s:%u]\n", 
+                       inet_ntoa(addr_in->sin_addr), 
+                       ntohs(addr_in->sin_port));
               
+               // remove timeout client sock
+               for (j = 0; j < FD_SIZE; j++) {
+                   struct timeval time_now;
+                   int time_out_sec = 10;
+                   gettimeofday(&time_now, NULL);
+                   printf("processing client sock[%d]\t", client[j]);
+                   if (client[j] >= 0 && time_now.tv_sec > client_tv[j].tv_sec + time_out_sec) {
+                       printf("get a time out client sock[%d]=%d\n", j, client[j]);
+                       close( client[j]);
+                       FD_CLR( client[j], &allset );
+                       client[j] = -1;
+                       printf("close client sock[%d]=%d\n", j, client[j]);
+                   }
+               }
+               printf("\n");
               
                for( i = 0; i < FD_SIZE; i++ )    //!> 注意此处必须是循环，刚开始我认
                                                    //!> 为可以直接设置一个end_i来直接处
@@ -437,21 +481,6 @@ int main( int argc, char ** argv )
                {
                    printf( "Too many client connect... close current connfd[%d]\n", connfd);
                    close( connfd );            //!> if 满了那么就不连接你了，关闭吧
-                   // remove timeout client sock
-                   for (j = 0; j < FD_SIZE; j++) {
-                       struct timeval time_now;
-                       int time_out_sec = 10;
-                       gettimeofday(&time_now, NULL);
-                       printf("processing client sock[%d]\t", client[j]);
-                       if (time_now.tv_sec > client_tv[j].tv_sec + time_out_sec) {
-                           printf("get a time out client sock[%d]=%d\n", j, client[j]);
-                           close( client[j]);
-                           FD_CLR( client[j], &allset );
-                           client[j] = -1;
-                           printf("close client sock[%d]=%d\n", j, client[j]);
-                       }
-                   }
-                   printf("\n");
                 continue;                    //!> 返回
                }
                                             //!> listen的作用就是向数组中加入套接字！
