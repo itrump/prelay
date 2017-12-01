@@ -2,6 +2,8 @@
  * reference:
  *  - http://pubs.opengroup.org/onlinepubs/9699919799/functions/accept.html 
  *  - https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.hala001/orgblockasyn.htm
+ *  - http://www.scs.stanford.edu/nyu/03sp/lab/tcpproxy.html
+ *  - http://www.partow.net/programming/tcpproxy/index.html
  **/
 // TODO
 //  - resolve problems on mobile devices
@@ -19,6 +21,7 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
+#include <time.h>
 #include <signal.h>
 
 #define BUF_LEN (1024 * 1024)
@@ -29,9 +32,11 @@
 #define LOGI(format, ...)                                                        \
 {                                                                         \
        time_t now = time(NULL);                                             \
-       char timestr[20];                                                    \
-       strftime(timestr, 20, TIME_FORMAT, localtime(&now));                 \
-       printf(" %s [prelay] INFO: " format "\n", timestr, ## __VA_ARGS__); \
+       struct timeval t_now;                                         \
+       gettimeofday(&t_now, NULL);                                     \
+       char timestr[32];                                                    \
+       strftime(timestr, 32, TIME_FORMAT, localtime(&now));                  \
+       printf(" %s.%ld [prelay] INFO: " format "\n", timestr, t_now.tv_usec, ## __VA_ARGS__); \
 }
 
 #define print(format, ...)   \
@@ -56,7 +61,7 @@ int build_obfs_conn() {
     int obfs_connfd;
     // connect to obfs local
     if ((obfs_connfd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        printf( "Create obfs socket Error : %d\n", errno );
+        LOGI( "Create obfs socket Error : %d\n", errno );
         return -1;
     }
     bzero(&obfs_serv_addr, sizeof(obfs_serv_addr));
@@ -66,10 +71,10 @@ int build_obfs_conn() {
 
     if (connect(obfs_connfd, (struct sockaddr*)&obfs_serv_addr, 
             sizeof(obfs_serv_addr)) < 0) {
-        printf( "connect to obfs local Error : %d,%m\n", errno);
+        LOGI( "connect to obfs local Error : %d,%m\n", errno);
         return -1;
     }
-    printf("build obfs sock[%d]\n", obfs_connfd);
+    LOGI("build obfs sock[%d]\n", obfs_connfd);
     return obfs_connfd;
 }
 void install_signal() {
@@ -88,7 +93,7 @@ int init_ctx(struct port_relay_ctx_t* p_ctx, int size) {
     for (i = 0 ; i < size; ++i) {
         tsock = build_obfs_conn();
         if (tsock < 0) {
-            printf("get socket[%d] error!\n", tsock);
+            LOGI("get socket[%d] error!\n", tsock);
             return -1;
         }
         p_ctx->obfs_sock = tsock;
@@ -120,7 +125,7 @@ int serve_prepare(fd_set* fset, int* maxfd, struct port_relay_ctx_t* p_ctx,
         FD_SET(p_ctx->obfs_sock, fset);
         p_ctx++;
     }
-    printf("server prepared ok.\n");
+    LOGI("server prepared ok.\n");
     return 0;
 }
 
@@ -130,20 +135,21 @@ int rebuild_obfs_sock(fd_set* fdset,
     int new_sock = -1;
     struct port_relay_ctx_t* ptr = p_ctx;
     for (i = 0; i < size; ++i) {
-        printf("get obfs sock[%d] ctx sock[%d]\n",
+        LOGI("get obfs sock[%d] ctx sock[%d]\n",
                 obfs_sock, ptr->obfs_sock);
         if (obfs_sock != ptr->obfs_sock) { 
             // be careful not forget
             ptr++;
             continue;
         }
+        // release obfs sock
         FD_CLR(obfs_sock, fdset);
         close(obfs_sock);
         ptr->client_sock = -1;
         ptr->status = 0;
         ptr->obfs_sock = build_obfs_conn();
         if (ptr->obfs_sock < 0) {
-            printf("build obfs sock[%d] failed.", ptr->obfs_sock);
+            LOGI("build obfs sock[%d] failed.", ptr->obfs_sock);
             return -1;
         }
         new_sock = ptr->obfs_sock;
@@ -155,10 +161,10 @@ int rebuild_obfs_sock(fd_set* fdset,
         break;
     }
     if (i >= size) {
-        printf("[%d] not found!\n", obfs_sock);
+        LOGI("[%d] not found!\n", obfs_sock);
         return -1;
     }
-    printf("[%d] rebuild sock[%d] ok.", obfs_sock, new_sock);
+    LOGI("[%d] rebuild sock[%d] ok.", obfs_sock, new_sock);
     return 0;
 }
 
@@ -170,9 +176,9 @@ int write_to_obfs(int client_sock, struct port_relay_ctx_t* p_ctx,
     for (i = 0; i < size; ++i) {
         // exists session
         if (ptr_ctx->client_sock == client_sock) {
-            printf("old session, begin write to obfs sock\n");
+            LOGI("old session, begin write to obfs sock\n");
             write_size = write(ptr_ctx->obfs_sock, buf, buf_size);
-            printf("old sesion, client sock[%d] obfs sock[%d] write size[%d]\n", 
+            LOGI("old sesion, client sock[%d] obfs sock[%d] write size[%d] errno[%m]\n", 
                     client_sock, ptr_ctx->obfs_sock, write_size);
             break;
         } 
@@ -183,10 +189,10 @@ int write_to_obfs(int client_sock, struct port_relay_ctx_t* p_ctx,
         ptr_ctx = p_ctx;
         for (j = 0; j < size; ++j) {
             // find an idle obfs socket
-            printf("get ptr[%p]\t", ptr_ctx);
+            LOGI("get ptr[%p]\t", ptr_ctx);
             if (ptr_ctx->client_sock < 0 && ptr_ctx->status == 0) {
                 write_size = write(ptr_ctx->obfs_sock, buf, buf_size);
-                printf("first time, client sock[%d] obfs sock[%d] write size[%d]\n", 
+                LOGI("first time, client sock[%d] obfs sock[%d] write size[%d] errno[%m]\n", 
                         client_sock, ptr_ctx->obfs_sock, write_size);
                 // relate two socket and set status to busy
                 ptr_ctx->client_sock = client_sock;
@@ -195,12 +201,34 @@ int write_to_obfs(int client_sock, struct port_relay_ctx_t* p_ctx,
             }
             ptr_ctx++;
         }
-        printf("\n");
+        LOGI("\n");
         // after traverse, no idel one
         if (j >= size) {
-            printf("j[%d] size[%d] no idel socket!\n", j, size);
+            LOGI("j[%d] size[%d] no idel socket!\n", j, size);
             return -1;
         }
+    }
+    return 0;
+}
+
+int destroy_client_sock(fd_set* aset, int obfs_sock,
+        struct port_relay_ctx_t * p_ctx, int size) {
+    int i = 0, tsock = -1, csock = -1;
+    struct port_relay_ctx_t* ptr = p_ctx;
+    for (int i = 0; i < size; ++i, ptr++) {
+        tsock = ptr->obfs_sock;
+        csock = ptr->client_sock;
+        if (tsock != obfs_sock) {
+            continue;
+        }
+        // release close client sock
+        if (csock >= 0) {
+            LOGI("clear and close client sock[%d]", csock);
+            FD_CLR(ptr->client_sock, aset);
+            close(ptr->client_sock);
+            ptr->status = 0;
+        }
+        break;
     }
     return 0;
 }
@@ -212,34 +240,45 @@ int read_obfs_data(fd_set* rset, fd_set* allset,
     char         obfs_buf[BUF_LEN];               
     ssize_t read_len = 0;
     int write_size = -1;
-    printf("enter read obfs data\n");
+    LOGI("enter read obfs data\n");
     struct port_relay_ctx_t * ptr = p_ctx;
     for (i = 0; i < size; ++i) {
         tsock = ptr->obfs_sock;
         csock = ptr->client_sock;
-        printf("traverse obfs sock[%d] client sock[%d]\t", tsock, csock);
+        LOGI("traverse obfs sock[%d] client sock[%d]\t", tsock, csock);
         if (FD_ISSET(tsock, rset)) {
-            printf("get a ready obfs sock[%d]\n", tsock);
+            LOGI("get a ready obfs sock[%d]\n", tsock);
             memset(obfs_buf, 0, sizeof(obfs_buf));
             read_len = read(tsock, obfs_buf, BUF_LEN);
-            printf("get data from obfs server, read len[%d]\n", (int)read_len);
+            LOGI("get data from obfs server, read len[%d]\n", (int)read_len);
             // obfs sock disconnected
-            if (read_len == 0) {
-                printf("[%d] get from obfs, Data size is 0, maybe closed.\n", tsock);
+            if (read_len == 0 || read_len < 0) {
+                LOGI("[%d] get [%lu] bytes from obfs, Data size is 0, maybe closed or error.\n", 
+                        tsock, read_len);
                 if (rebuild_obfs_sock(allset, tsock, ptr, CTX_SIZE) < 0) {
-                    printf("rebuild obfs sock failed.");
+                    LOGI("rebuild obfs sock failed.");
                     return -1;
                 }
-            // error
-            } else if (read_len < 0) {
-                printf("Recv error...size[%d]\n", (int)(read_len));
-                return -1;
             // get data succ
             } else {
                 // TODO check csock valid
+                if (csock < 0) {
+                    LOGI("get csock[%d] unexpected, quit write obfs to client, size[%lu]", 
+                            csock, read_len);
+                    continue;
+                }
                 write_size = write(csock, obfs_buf, read_len);
-                printf("get from obfs, write to client sock[%d] data size:%d\n", 
+                LOGI("get from obfs, write to client sock[%d] data size:%d, errno:%m\n", 
                         csock, write_size);
+                // write fail
+                if (write_size < 0) {
+                    if (destroy_client_sock(allset, tsock, ptr, CTX_SIZE) < 0) {
+                        LOGI("write size < 0, rebuild obfs sock failed.");
+                        return -1;
+                    }
+                    errno = 0;
+                    LOGI("reset errno to %d", errno);
+                }
                 if (read_len > *obfs_max_read_size) {
                     *obfs_max_read_size = read_len;
                 }
@@ -256,13 +295,13 @@ int destroy_client_session(struct port_relay_ctx_t* p_ctx,
     struct port_relay_ctx_t* ptr_ctx = p_ctx;
     for (i = 0; i < size; ++i, ptr_ctx++) {
         csock = ptr_ctx->client_sock;
-        printf("traverse client sock[%d], try find [%d]\n", 
+        LOGI("traverse client sock[%d], try find [%d]\n", 
                 csock, client_sock);
         if (csock != client_sock) {
             continue;
         }
         // release this client sock and idle it
-        printf("remove ctx client sock[%d], target sock[%d], and set idle\n", 
+        LOGI("remove ctx client sock[%d], target sock[%d], and set idle\n", 
                 ptr_ctx->client_sock, client_sock);
         ptr_ctx->client_sock = -1;
         ptr_ctx->status = 0;
@@ -276,12 +315,12 @@ int update_maxfd(struct port_relay_ctx_t* p_ctx, int size, int* maxfd) {
     struct port_relay_ctx_t* ptr = p_ctx;
     for (i = 0; i < size; ++i) {
         if (ptr->obfs_sock > *maxfd) {
-            printf("update maxfd from[%d] to [%d]",
+            LOGI("update maxfd from[%d] to [%d]",
                     *maxfd, ptr->obfs_sock);
             *maxfd = ptr->obfs_sock;
         }
         if (ptr->client_sock > *maxfd) {
-            printf("update maxfd from[%d] to [%d]",
+            LOGI("update maxfd from[%d] to [%d]",
                     *maxfd, ptr->client_sock);
             *maxfd = ptr->client_sock;
         }
@@ -300,7 +339,7 @@ int set_fd_nonblocking(int fd) {
     int flags;
     flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) {
-        printf("get flags[%d], change to 0", flags);
+        LOGI("get flags[%d], change to 0", flags);
         flags = 0;
     }
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -324,22 +363,22 @@ int main( int argc, char ** argv )
     int write_size = 0;
     int loop_count = 0;
 
-    //LOGI("server begin init.");
+    LOGI("server begin init.");
     if (init_port_relay(ctx, CTX_SIZE) < 0) {
-        printf("init failed.\n");
+        LOGI("init failed.\n");
         return -1;
     }
 
    
-    //LOGI("server begin listen.");
+    LOGI("server begin listen.");
     if( ( listenfd = socket( AF_INET, SOCK_STREAM, 0 ) ) == -1 )
     {
-        printf( "Create socket Error : %d\n", errno );
+        LOGI( "Create socket Error : %d\n", errno );
         exit( EXIT_FAILURE );
     }
     if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, 
             (char *)&opt, sizeof(opt)) < 0) {
-        printf( "setsocketopt failed.: %d\n", errno );
+        LOGI( "setsocketopt failed.: %d\n", errno );
         exit( EXIT_FAILURE );
     }
 
@@ -356,7 +395,7 @@ int main( int argc, char ** argv )
     //!> 绑定
     if( bind( listenfd, ( struct sockaddr * )&servaddr, sizeof( servaddr ) ) == -1 )
     {   
-        printf("Bind Error : %d\n", errno);
+        LOGI("Bind Error : %d\n", errno);
         exit(EXIT_FAILURE  );
     }
    
@@ -364,7 +403,7 @@ int main( int argc, char ** argv )
     //!> 监听
     if( listen( listenfd, SOMAXCONN) == -1 )
     {
-        printf("Listen Error : %d\n", errno );
+        LOGI("Listen Error : %d\n", errno );
         exit( EXIT_FAILURE );
     }
    
@@ -385,7 +424,7 @@ int main( int argc, char ** argv )
                     //!> 说明当前我对此套接字有兴趣，下次select的时候通知我！
     //LOGI("server begin prepare.");
     if (serve_prepare(&allset, &maxfd, ctx, CTX_SIZE) < 0) {
-        printf("serve prepare failed.\n");
+        LOGI("serve prepare failed.\n");
         return -1;
     }
     //LOGI("server begin loop.");
@@ -396,15 +435,15 @@ int main( int argc, char ** argv )
             // break;
         }
         // update_maxfd(ctx, CTX_SIZE, &maxfd);
-        printf("max fd[%d] max read size[%lu] obfs max read size[%lu]\n", 
+        LOGI("max fd[%d] max read size[%lu] obfs max read size[%lu]\n", 
                 maxfd, max_read_size, obfs_max_read_size);
         //LOGI("server loop %d.", loop_count);
-        printf("server loop %d, select return %d\n", loop_count, nready);
+        LOGI("server loop %d, select return %d\n", loop_count, nready);
         rset = allset;//!> 由于allset可能每次一个循环之后都有变化，所以每次都赋值一次
         //LOGI("server begin select.");
         if( (nready = select( maxfd + 1, &rset, NULL, NULL, NULL )) == -1)
         {                    //!> if 存在关注
-            printf("Select Erorr : %d\n", errno );
+            LOGI("Select Erorr : %d\n", errno );
             //exit( EXIT_FAILURE );
             return -1;
         }
@@ -420,30 +459,30 @@ int main( int argc, char ** argv )
         //LOGI("server read obfs data.");
         // read obfs data
         if (read_obfs_data(&rset, &allset, ctx, CTX_SIZE, &obfs_max_read_size) < 0) {
-            printf("read obfs data error.\n");
+            LOGI("read obfs data error.\n");
             break;
         }
        
        
         //LOGI("read client sock data.");
-        printf("read client sock data.\n");
+        LOGI("read client sock data.\n");
         if( FD_ISSET( listenfd, &rset ) )            //!> if 是监听接口上的“来电”
         {                                            //!>
-            //!> printf("server listen ...\n");
+            //!> LOGI("server listen ...\n");
             clilen = sizeof( chiaddr );
            
-            printf("Start doing... \n");
+            LOGI("Start doing... \n");
            
                if( ( connfd  = accept( listenfd, (struct sockaddr *)&chiaddr, &clilen ) ) == -1 )
                {                                        //!> accept 返回的还是套接字
-                   printf( "Accept Error : %d\n", errno );
+                   LOGI( "Accept Error : %d\n", errno );
                    continue;
                }
                //LOGI("client connect fd:%d.", connfd);
                char ip_str[INET6_ADDRSTRLEN];
                // ipv4 ok, while ipv6 differs
                struct sockaddr_in* addr_in = (struct sockaddr_in*)&chiaddr;
-               printf("get connect from client[%s:%u]\n", 
+               LOGI("get connect from client[%s:%u]\n", 
                        inet_ntoa(addr_in->sin_addr), 
                        ntohs(addr_in->sin_port));
               
@@ -452,16 +491,16 @@ int main( int argc, char ** argv )
                    struct timeval time_now;
                    int time_out_sec = 10;
                    gettimeofday(&time_now, NULL);
-                   printf("processing client sock[%d]\t", client[j]);
+                   LOGI("processing client sock[%d]\t", client[j]);
                    if (client[j] >= 0 && time_now.tv_sec > client_tv[j].tv_sec + time_out_sec) {
-                       printf("get a time out client sock[%d]=%d\n", j, client[j]);
+                       LOGI("get a time out client sock[%d]=%d\n", j, client[j]);
                        close( client[j]);
                        FD_CLR( client[j], &allset );
                        client[j] = -1;
-                       printf("close client sock[%d]=%d\n", j, client[j]);
+                       LOGI("close client sock[%d]=%d\n", j, client[j]);
                    }
                }
-               printf("\n");
+               LOGI("\n");
               
                for( i = 0; i < FD_SIZE; i++ )    //!> 注意此处必须是循环，刚开始我认
                                                    //!> 为可以直接设置一个end_i来直接处
@@ -469,7 +508,7 @@ int main( int argc, char ** argv )
                {                                    //!> 字的退出时间是不一样的，后面的
                    if( client[i] < 0 )                //!> 可能先退出，那么就乱了，所以只
                    {                                //!> 有这样了！
-                       printf("set client[%d]=%d\n", i, connfd);
+                       LOGI("set client[%d]=%d\n", i, connfd);
                        client[i] = connfd;            //!> 将client的请求连接保存
                        // record active time
                        gettimeofday(&(client_tv[i]), NULL);
@@ -479,12 +518,12 @@ int main( int argc, char ** argv )
               
                if( i == FD_SIZE )                //!> The last one
                {
-                   printf( "Too many client connect... close current connfd[%d]\n", connfd);
+                   LOGI( "Too many client connect... close current connfd[%d]\n", connfd);
                    close( connfd );            //!> if 满了那么就不连接你了，关闭吧
                 continue;                    //!> 返回
                }
                                             //!> listen的作用就是向数组中加入套接字！
-            printf("put connfd[%d] to allset\n", connfd);
+            LOGI("put connfd[%d] to allset\n", connfd);
             FD_SET( connfd, &allset );    //!> 说明现在对于这个连接也是感兴趣的！
                                             //!> 所以加入allset的阵容
             if( connfd > maxfd )            //!> 这个还是为了解决乱七八糟的数组模型
@@ -507,26 +546,26 @@ int main( int argc, char ** argv )
             {            //!> 也就说client数组不是连续的全正数或者-1，可能是锯齿状的
                 if( FD_ISSET( sockfd, &rset ) )    //!> if 当前这个数据套接字有要读的
                  {
-                     printf("get an active fd[%d]\n", sockfd);
+                     LOGI("get an active fd[%d]\n", sockfd);
                      memset( buf, 0, sizeof( buf ) );    //!> 此步重要，不要有时候出错
                 
                      n = read( sockfd, buf, BUF_LEN);
                      if( n < 0 )
                      {
-                         printf("Error!\n");
+                         LOGI("Error!\n");
                          close( sockfd );            //!> 说明在这个请求端口上出错了！
                         FD_CLR( sockfd, &allset );
-                        printf("read size < 0, close client[%d] fd[%d]\n", i, sockfd);
+                        LOGI("read size < 0, close client[%d] fd[%d]\n", i, sockfd);
                         client[i] = -1;
                         continue;
                      }
                     if( n == 0 )
                     {
-                        printf("client sock[%d] no data. closed.\n", sockfd);
+                        LOGI("client sock[%d] no data. closed.\n", sockfd);
                         close( sockfd );            //!> 说明在这个请求端口上读完了！
                         destroy_client_session(ctx, CTX_SIZE, sockfd);
                         FD_CLR( sockfd, &allset );
-                        printf("no data. close client[%d] fd[%d]\n", i, sockfd);
+                        LOGI("no data. close client[%d] fd[%d]\n", i, sockfd);
                         client[i] = -1;
                         continue;
                     }
@@ -534,8 +573,8 @@ int main( int argc, char ** argv )
                         max_read_size = n;
                     }
                    
-                    // printf("Server Recv: %s\n", buf);
-                    printf("Server Recv data size: %lu, from fd:%d\n", 
+                    // LOGI("Server Recv: %s\n", buf);
+                    LOGI("Server Recv data size: %lu, from fd:%d\n", 
                             n, sockfd);
                    
                     if( strcmp( buf, "q" ) == 0 )                //!> 客户端输入“q”退出标志
@@ -546,7 +585,7 @@ int main( int argc, char ** argv )
                         continue;
                     }
                    
-                    printf("Server receive ss data size: %lu\n", n);
+                    LOGI("Server receive ss data size: %lu\n", n);
                     // write( sockfd, buf, n );        //!> 读出来的写进去
 
                     // obfs process
